@@ -1,77 +1,71 @@
+
 import streamlit as st
 import requests
-from datetime import datetime, date
+from datetime import datetime
 import pytz
 
-st.set_page_config(page_title="SportPredicts - Follower", layout="centered")
+# Titolo e layout
+st.set_page_config(layout="wide")
+st.title("📊 SportPredicts - Partite in Tempo Reale")
 
-st.markdown("<h2 style='text-align: center;'>📊 Pronostici Sportivi</h2>", unsafe_allow_html=True)
+# Selezione dello sport
+sport = st.selectbox("Scegli lo sport", ["Calcio", "Basket"])
 
-API_KEY = "03A75364E9FA01F0BF505A560EB08496"
-HEADERS = {"x-apisports-key": API_KEY}
-TIMEZONE = "Europe/Rome"
+# HEADERS API (da personalizzare)
+HEADERS = {
+    "x-rapidapi-key": "03A75364E9FA01F0BF505A560EB08496",  # Inserisci la tua API key
+    "x-rapidapi-host": "v3.football.api-sports.io" if sport == "Calcio" else "v3.basketball.api-sports.io"
+}
 
-if "preferiti" not in st.session_state:
-    st.session_state.preferiti = []
+# Funzione per recuperare le leghe
+@st.cache_data(ttl=3600)
+def get_leagues(sport):
+    url = "https://v3.football.api-sports.io/leagues" if sport == "Calcio" else "https://v3.basketball.api-sports.io/leagues"
+    response = requests.get(url, headers=HEADERS)
+    data = response.json()
+    return [
+        {"id": l["league"]["id"], "name": f'{l["league"]["name"]} - {l["country"]["name"]}'}
+        for l in data.get("response", [])
+    ]
 
-sport = st.selectbox("Seleziona sport", ["Calcio", "Basket"])
-selected_date = st.date_input("Data", value=date.today())
+# Selezione delle leghe
+leagues = get_leagues(sport)
+selected_leagues = st.multiselect("🔎 Seleziona le leghe da visualizzare", [l["name"] for l in leagues])
+selected_ids = [l["id"] for l in leagues if l["name"] in selected_leagues]
 
-st.write("Filtri avanzati (facoltativi):")
-min_quota = st.slider("Quota minima", 1.0, 5.0, 1.5, 0.1)
-max_quota = st.slider("Quota massima", 1.0, 10.0, 3.0, 0.1)
-
-def get_matches(sport, selected_date):
-    formatted_date = selected_date.strftime("%Y-%m-%d")
+# Funzione per caricare le partite
+def get_matches(sport):
     if sport == "Calcio":
-        url = f"https://v3.football.api-sports.io/fixtures?date={formatted_date}"
+        url = "https://v3.football.api-sports.io/fixtures"
+        params = {"date": datetime.now().strftime("%Y-%m-%d")}
     else:
-        url = f"https://v3.basketball.api-sports.io/games?date={formatted_date}"
+        url = "https://v3.basketball.api-sports.io/games"
+        params = {"date": datetime.now().strftime("%Y-%m-%d")}
+    
+    response = requests.get(url, headers=HEADERS, params=params)
+    return response.json().get("response", [])
 
-    try:
-        response = requests.get(url, headers=HEADERS)
-        data = response.json()
-        return data.get("response", [])
-    except Exception as e:
-        st.error("Errore nel recupero dei dati API")
-        return []
+# Visualizzazione partite
+matches = get_matches(sport)
 
-matches = get_matches(sport, selected_date)
-
-def convert_utc_to_local(utc_string):
-    utc_time = datetime.fromisoformat(utc_string.replace("Z", "+00:00"))
-    utc_time = utc_time.astimezone(pytz.timezone(TIMEZONE))
-    return utc_time.strftime("%H:%M")
-
-st.subheader(f"Pronostici del {selected_date.strftime('%d/%m/%Y')}")
-
-if matches:
-    for match in matches[:15]:  # max 15
-        if sport == "Calcio":
-            home = match["teams"]["home"]["name"]
-            away = match["teams"]["away"]["name"]
-            time = convert_utc_to_local(match["fixture"]["date"])
-            match_id = match["fixture"]["id"]
-            quote = 1.80  # Placeholder
-        else:
-            home = match["teams"]["home"]["name"]
-            away = match["teams"]["away"]["name"]
-            time = convert_utc_to_local(match["date"])
-            match_id = match["id"]
-            quote = 1.90  # Placeholder
-
-        if min_quota <= quote <= max_quota:
-            col1, col2 = st.columns([0.85, 0.15])
-            with col1:
-                st.markdown(f"**{home} vs {away}** — 🕒 {time} — Quota: {quote}")
-            with col2:
-                if st.button("❤️", key=str(match_id)):
-                    st.session_state.preferiti.append(f"{home} vs {away} — {time}")
-
-    if st.session_state.preferiti:
-        st.subheader("⭐ Pronostici salvati")
-        for p in st.session_state.preferiti:
-            st.markdown(f"- {p}")
+if not matches:
+    st.info("⚠️ Nessuna partita trovata per oggi.")
 else:
-    st.info("Nessuna partita trovata per questa data.")
+    for match in matches:
+        league_id = match["league"]["id"] if sport == "Calcio" else match["league"]["id"]
+        if selected_ids and league_id not in selected_ids:
+            continue
+
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            st.markdown(f"### {match['teams']['home']['name']} 🆚 {match['teams']['away']['name']}")
+            st.caption(f"🏆 {match['league']['name']} | 📍 {match['league']['country']}")
+        
+        with col2:
+            # Orario corretto con fuso italiano
+            utc_time = datetime.fromisoformat(match['fixture']['date'].replace("Z", "+00:00"))
+            local_time = utc_time.astimezone(pytz.timezone("Europe/Rome"))
+            st.write("🕒", local_time.strftime("%H:%M"))
+
+        st.divider()
 
